@@ -8,8 +8,9 @@ cd "$(dirname "$0")/.."
 python -m piksign.download.drive
 
 # COCO reals: 12k train (VAE recon sources + semantic reals) and full val (eval reals)
-python -m piksign.download.coco --split train2017 --n 12000
-python -m piksign.download.coco --split val2017 --n 0
+# --delete-zip frees the 19GB archive immediately (important on small pod disks)
+python -m piksign.download.coco --split train2017 --n 12000 --delete-zip
+python -m piksign.download.coco --split val2017 --n 0 --delete-zip
 
 # Nano Banana pairs: Apple CDN edits + OpenImages S3 sources, piksign split
 python -m piksign.download.pico_banana --workers 16

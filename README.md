@@ -68,24 +68,32 @@ bash scripts/04_eval.sh            # GPU ~2h : launder twins, score, calibrate, 
 
 Stop the pod between phases — everything lives on the network volume.
 
-## Budget mode (~$24 of RunPod credits)
+## Budget mode (~$24 of RunPod credits): single A40 pod
 
-The A100 is only genuinely needed for the VLM phase. Allocation that fits $24:
+One **A40 48GB** pod (~$0.44/hr) runs every phase — 48GB fits the 32B-AWQ
+DPO labeler and the 7B DPO training, so no A100 and no network volume are
+needed. Create it with **~120GB volume disk** (80GB chokes on the COCO zip +
+model caches), then STOP (never terminate) between sessions:
 
-| Phase | Pod | Est. |
+| Phase | A40 hours | Est. |
 |---|---|---|
-| Network volume **150GB**, ~2 weeks, delete when done | — | ~$5 |
-| `00_download_all.sh` | CPU pod ($0.05–0.10/hr, ~5h) | ~$0.5 |
-| `01_recon.sh` + `02_train_experts.sh` + expert eval | RTX 4090 24GB (~$0.35–0.69/hr, ~9h) | ~$4–6 |
-| `03_train_vlm.sh` with `LABEL_MODEL=Qwen/Qwen2.5-VL-32B-Instruct-AWQ` | A100 80GB ($1.50/hr, ~6h) | ~$9 |
-| VLM eval scoring | tail of the A100 session or 4090 | ~$1 |
+| `00_download_all.sh` (run on the pod) | ~5h | $2.3 |
+| `01_recon.sh` | ~3h | $1.4 |
+| `02_train_experts.sh` | ~10h | $4.5 |
+| `03_train_vlm.sh` with `LABEL_MODEL=Qwen/Qwen2.5-VL-32B-Instruct-AWQ` | ~12h | $5.4 |
+| `04_eval.sh` | ~3h | $1.4 |
 
-**Total ≈ $17–19, leaving ~$5 buffer.** Rules that keep it there: STOP the pod
-the moment a phase ends (billing is per-millisecond); never re-download (the
-volume persists); run `--delete-zip` on COCO; and if credits run low, ship v1
-without the DPO branch — the harness/CLI fall back to the base 7B VLM
-automatically, which loses only a few points in the wild (per the paper), and
-the DPO run can be added later with `03_train_vlm.sh` unchanged.
+**Total ≈ $15, leaving ~$9 buffer.** Rules that keep it there: STOP the pod the
+moment a phase ends (billing is per-millisecond; stopped ≈ $0.03/hr on 120GB —
+finish within a week or two); never re-download; delete the 32B-AWQ HF cache
+after labeling; and if credits run low, ship v1 without the DPO branch — the
+harness/CLI fall back to the base 7B VLM automatically (a few points weaker in
+the wild per the paper), and `03_train_vlm.sh` adds it later unchanged.
+
+Caveats of the single-pod pattern: a stopped pod's GPU can be rented out, so a
+restart occasionally waits for the GPU to free up; and terminating the pod
+deletes its volume disk. The alternative (datacenter network volume + disposable
+pods) avoids both at slightly higher cost and setup friction.
 
 Fresh eval fakes are API costs, not GPU credits: Gemini's free tier covers
 Nano Banana generations (spread over a few days of daily quota), and ~$5 of

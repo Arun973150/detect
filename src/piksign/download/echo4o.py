@@ -6,6 +6,9 @@ The semantic VLM must ONLY see semantic differences, so this corpus is:
 Low-level cues are destroyed later by online pixel-scrambling during DPO
 labeling/training, not here.
 
+STREAMING by default: Echo-4o is ~180k images; we keep only --n of them and
+never download the full dataset to disk.
+
 Outputs:
   data/processed/semantic/fake/<idx>.jpg
   data/processed/semantic/real/<idx>.jpg
@@ -17,7 +20,7 @@ from __future__ import annotations
 import argparse
 import random
 import re
-import shutil
+from itertools import chain
 from pathlib import Path
 
 from PIL import Image
@@ -31,29 +34,24 @@ Image.MAX_IMAGE_PIXELS = None
 SURREAL_HINTS = re.compile(r"surreal|fantasy|imagin", re.I)
 
 
-def load_echo4o(repo: str, config: str | None, split: str):
-    from datasets import get_dataset_config_names, load_dataset
-
-    cfg = config
-    if cfg is None:
-        try:
-            configs = get_dataset_config_names(repo)
-        except Exception:  # noqa: BLE001
-            configs = []
-        for c in configs:
-            if SURREAL_HINTS.search(c):
-                cfg = c
-                break
-    print(f"loading {repo} config={cfg} split={split} ...")
-    ds = load_dataset(repo, cfg, split=split) if cfg else load_dataset(repo, split=split)
-    return ds
+def pick_config(repo: str, wanted: str | None):
+    from datasets import get_dataset_config_names
+    if wanted:
+        return wanted
+    try:
+        configs = get_dataset_config_names(repo)
+    except Exception:  # noqa: BLE001
+        return None
+    for c in configs or []:
+        if SURREAL_HINTS.search(c):
+            return c
+    return configs[0] if configs else None
 
 
-def find_image_column(ds) -> str:
-    from datasets import Image as HFImage
-    cols = [n for n, f in ds.features.items() if isinstance(f, HFImage)]
+def detect_image_column(example: dict) -> str:
+    cols = [k for k, v in example.items() if isinstance(v, Image.Image)]
     if not cols:
-        raise SystemExit(f"no image column found; features: {ds.features}")
+        raise SystemExit(f"no image column found; keys: {list(example)}")
     return cols[0]
 
 
@@ -66,34 +64,46 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=5000)
     ap.add_argument("--reals-dir", type=Path, required=True,
                     help="directory of real photos to sample the real class from (e.g. COCO subset)")
+    ap.add_argument("--no-streaming", action="store_true")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    rng = random.Random(args.seed)
+    from datasets import load_dataset
 
-    # fakes: Echo-4o surreal generations
+    rng = random.Random(args.seed)
+    streaming = not args.no_streaming
+    cfg = pick_config(args.repo_id, args.config)
+    print(f"loading {args.repo_id} config={cfg} split={args.split} streaming={streaming} ...")
+    ds = (load_dataset(args.repo_id, cfg, split=args.split, streaming=streaming)
+          if cfg else load_dataset(args.repo_id, split=args.split, streaming=streaming))
+    ds = ds.shuffle(seed=args.seed, buffer_size=1000) if streaming else ds.shuffle(seed=args.seed)
+
+    it = iter(ds)
+    first = next(it)
+    col = detect_image_column(first)
+    print(f"image column: {col}")
+
     fake_out = ensure(processed_dir("semantic", "fake"))
-    ds = load_echo4o(args.repo_id, args.config, args.split)
-    col = find_image_column(ds)
-    print(f"image column: {col}  rows: {len(ds)}")
-    indices = list(range(len(ds)))
-    rng.shuffle(indices)
     written = 0
-    for idx in tqdm(indices, desc="echo4o fakes"):
+    bar = tqdm(total=args.n, desc="echo4o fakes")
+    for row in chain([first], it):
         if written >= args.n:
             break
-        dst = fake_out / f"{idx:07d}.jpg"
+        dst = fake_out / f"{written:07d}.jpg"
         if dst.exists():
             written += 1
+            bar.update(1)
             continue
         try:
-            img = ds[idx][col]
+            img = row[col]
             if img is None:
                 continue
             normalize_save(img.convert("RGB"), dst)
             written += 1
+            bar.update(1)
         except Exception as e:  # noqa: BLE001
-            print(f"[skip {idx}] {e}")
+            print(f"[skip] {e}")
+    bar.close()
     print(f"fakes: {written} -> {fake_out}")
 
     # reals: sampled photos, same normalization funnel
