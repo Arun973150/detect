@@ -57,7 +57,9 @@ def main() -> None:
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--backbone", default=DEFAULT_BACKBONE)
     ap.add_argument("--lora-r", type=int, default=8)
-    ap.add_argument("--lora-alpha", type=float, default=8.0)
+    ap.add_argument("--lora-alpha", type=float, default=1.0,
+                    help="paper value 1.0 (conservative, best generalization); "
+                         "raise (e.g. 8.0) for target-specific experts")
     ap.add_argument("--crop", type=int, default=224)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--bs", type=int, default=32)

@@ -30,7 +30,7 @@ class PixelExpert(nn.Module):
         self,
         backbone: str = DEFAULT_BACKBONE,
         lora_r: int = 8,
-        lora_alpha: float = 8.0,
+        lora_alpha: float = 1.0,  # paper value: scaling alpha/r = 0.125, light touch -> best generalization
         crop: int = 224,
     ) -> None:
         super().__init__()
