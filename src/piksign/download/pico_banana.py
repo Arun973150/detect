@@ -38,6 +38,8 @@ import io
 import json
 import random
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -134,33 +136,81 @@ def choose_ids(records: dict[int, dict], args: argparse.Namespace) -> tuple[list
 
 
 # ------------------------------------------------------------------ download
+#
+# The CDN tolerates modest parallel bursts (verified empirically), but at
+# multi-thousand-file scale it may start throttling (429/403/503) or dropping
+# connections. This downloader therefore:
+#   - reuses one HTTP session per thread (connection pooling),
+#   - honors Retry-After and applies a GLOBAL backoff shared by all threads,
+#   - retries with exponential backoff + jitter,
+#   - is fully resumable (existing files are skipped) - if a run dies,
+#     just re-run the same command and it continues where it stopped.
 
-def _fetch(url: str, dest: Path, retries: int = 3) -> bool:
+_tls = threading.local()
+_throttle_lock = threading.Lock()
+_throttle_until = 0.0
+
+
+def _session() -> requests.Session:
+    s = getattr(_tls, "session", None)
+    if s is None:
+        s = requests.Session()
+        s.headers.update(UA)
+        _tls.session = s
+    return s
+
+
+def _global_pause(seconds: float) -> None:
+    global _throttle_until
+    with _throttle_lock:
+        _throttle_until = max(_throttle_until, time.time() + seconds)
+
+
+def _wait_for_throttle() -> None:
+    while True:
+        wait = _throttle_until - time.time()
+        if wait <= 0:
+            return
+        time.sleep(min(wait, 5.0))
+
+
+def _fetch(url: str, dest: Path, retries: int = 5, sleep: float = 0.0) -> bool:
     if dest.exists() and dest.stat().st_size > 0:
         return True
     for attempt in range(retries):
+        _wait_for_throttle()
+        if sleep:
+            time.sleep(sleep * (0.5 + random.random()))
         try:
-            r = requests.get(url, timeout=60, headers=UA)
+            r = _session().get(url, timeout=90)
             if r.status_code == 404:
                 return False
+            if r.status_code in (403, 408, 429, 500, 502, 503):
+                retry_after = float(r.headers.get("Retry-After") or 0)
+                pause = max(retry_after, min(120.0, 5.0 * 2**attempt))
+                print(f"[{r.status_code} on {dest.name}] backing off {pause:.0f}s (all threads)")
+                _global_pause(pause)
+                continue
             r.raise_for_status()
             tmp = dest.with_suffix(dest.suffix + ".part")
             tmp.write_bytes(r.content)
             tmp.rename(dest)
             return True
-        except Exception:  # noqa: BLE001
-            if attempt == retries - 1:
-                return False
+        except requests.RequestException:
+            _global_pause(min(60.0, 2.0 * 2**attempt))
     return False
 
 
-def download_many(jobs: list[tuple[str, Path]], workers: int, desc: str) -> int:
+def download_many(jobs: list[tuple[str, Path]], workers: int, desc: str,
+                  sleep: float = 0.0) -> int:
     ok = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_fetch, url, dest): url for url, dest in jobs}
+        futs = {ex.submit(_fetch, url, dest, 5, sleep): url for url, dest in jobs}
         for fut in tqdm(as_completed(futs), total=len(futs), desc=desc):
             ok += bool(fut.result())
-    print(f"{desc}: {ok}/{len(jobs)} fetched")
+    missed = len(jobs) - ok
+    print(f"{desc}: {ok}/{len(jobs)} fetched"
+          + (f" - {missed} missing; RE-RUN this command to retry them" if missed else ""))
     return ok
 
 
@@ -255,7 +305,11 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=0, help="cap train pairs (0 = all in split / 8000 random)")
     ap.add_argument("--random-split", action="store_true", help="ignore piksign manifests, sample randomly")
     ap.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
-    ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--workers", type=int, default=16, help="parallel downloads (OpenImages S3)")
+    ap.add_argument("--cdn-workers", type=int, default=8,
+                    help="parallel downloads against the Apple CDN (be polite)")
+    ap.add_argument("--cdn-sleep", type=float, default=0.05,
+                    help="mean per-request sleep vs the Apple CDN, seconds")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -266,9 +320,9 @@ def main() -> None:
     edited_dir = ensure(raw_dir("pico_banana", "edited"))
     source_dir = ensure(raw_dir("pico_banana", "source"))
 
-    # 1) Nano Banana edited images from Apple CDN
+    # 1) Nano Banana edited images from Apple CDN (throttle-aware, resumable)
     jobs = [(CDN_BASE + records[i]["output_image"], edited_dir / f"{i}.png") for i in all_ids]
-    download_many(jobs, args.workers, "edited (Apple CDN)")
+    download_many(jobs, args.cdn_workers, "edited (Apple CDN)", sleep=args.cdn_sleep)
 
     # 2) real sources: Flickr URL -> OpenImages ImageID -> S3 mirror
     needed_urls = {records[i]["open_image_input_url"] for i in all_ids}
