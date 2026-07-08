@@ -1,0 +1,27 @@
+# data and model artifacts never go to git
+data/
+checkpoints/
+hf_cache/
+outputs/
+*.pt
+*.pth
+*.safetensors
+*.zip
+*.tar.gz
+*.jsonl
+
+# committed exceptions
+!manifests/*.csv
+
+# python
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# misc
+.DS_Store
+Thumbs.db
+wandb/
