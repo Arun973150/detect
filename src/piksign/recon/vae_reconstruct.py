@@ -7,9 +7,12 @@ Task-Model Alignment recipe, and the part that transfers to unseen
 commercial generators.
 
 VAEs:
-  sd21  stabilityai/stable-diffusion-2-1 (subfolder vae) - classic LDM family
+  sd21  stabilityai/sd-vae-ft-mse - the canonical SD-family f8 autoencoder
+        (stabilityai/stable-diffusion-2-1 became gated on HF in 2026; this is
+        the same architecture family and the standard substitute - DRCT et al.
+        use it for the same purpose. The key stays "sd21" for path stability.)
   flux  black-forest-labs/FLUX.1-schnell (subfolder vae) - 16-ch modern family
-        (schnell is Apache-2.0 and ungated, same autoencoder as FLUX dev)
+        (Apache-2.0, auto-granted gating: requires a logged-in HF token)
 
 Both the reconstruction AND its source go through the identical crop +
 JPEG q95 funnel, so no format/resolution shortcut exists.
@@ -33,7 +36,7 @@ from ..paths import ensure, list_images, processed_dir
 Image.MAX_IMAGE_PIXELS = None
 
 VAES = {
-    "sd21": ("stabilityai/stable-diffusion-2-1", "vae"),
+    "sd21": ("stabilityai/sd-vae-ft-mse", None),
     "flux": ("black-forest-labs/FLUX.1-schnell", "vae"),
 }
 
@@ -82,8 +85,11 @@ def main() -> None:
 
     repo, sub = VAES[args.vae]
     dtype = torch.float16 if args.device == "cuda" else torch.float32
-    print(f"loading VAE {repo}/{sub} ...")
-    vae = AutoencoderKL.from_pretrained(repo, subfolder=sub, torch_dtype=dtype)
+    print(f"loading VAE {repo}" + (f"/{sub}" if sub else "") + " ...")
+    kwargs = {"torch_dtype": dtype}
+    if sub:
+        kwargs["subfolder"] = sub
+    vae = AutoencoderKL.from_pretrained(repo, **kwargs)
     vae = vae.to(args.device).eval()
 
     out_root = processed_dir("pairs", f"{args.vae}_recon")
