@@ -18,6 +18,14 @@ pip show vllm >/dev/null 2>&1 || pip install "vllm==0.10.2" "transformers==4.55.
 python -c "import transformers as t; assert t.__version__.startswith('4.55'), t.__version__" \
     || pip install "transformers==4.55.2"
 
+# TROUBLESHOOTING (each was hit once on RunPod, all fixed by the pins above
+# on a fresh pod; listed here in case of install-order damage):
+#  - "driver too old"          -> vllm pulled a too-new torch; the 0.10.2 pin fixes it
+#  - "all_special_tokens_..."  -> transformers too new; the 4.55.2 pin fixes it
+#  - silent download hang      -> hf_transfer/xet; disabled via env above
+#  - "CUDNN_STATUS_NOT_INITIALIZED" -> stale cudnn after torch downgrade; fix:
+#       pip install --force-reinstall "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu128
+
 # LABEL_MODEL=Qwen/Qwen2.5-VL-32B-Instruct-AWQ is the budget option (~2-3x
 # faster/cheaper than 72B, slightly weaker rationales).
 python -m piksign.train.label_dpo --model "${LABEL_MODEL:-Qwen/Qwen2.5-VL-72B-Instruct-AWQ}"
