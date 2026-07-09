@@ -23,6 +23,8 @@ URLS = {
     "val2017": "http://images.cocodataset.org/zips/val2017.zip",
     "unlabeled2017": "http://images.cocodataset.org/zips/unlabeled2017.zip",
 }
+# official image counts, used to resume-skip when the zip was already deleted
+EXPECTED = {"train2017": 118287, "val2017": 5000, "unlabeled2017": 123403}
 
 
 def download_resume(url: str, dest: Path) -> None:
@@ -76,9 +78,17 @@ def main() -> None:
     ap.add_argument("--delete-zip", action="store_true")
     args = ap.parse_args()
 
+    out = args.out or raw_dir("coco", f"{args.split}_{args.n or 'all'}")
+    target = args.n or EXPECTED.get(args.split, 0)
+    existing = len(list(out.glob("*.jpg"))) if out.exists() else 0
+    if target and existing >= target:
+        print(f"[skip] {out} already has {existing} images (target {target})")
+        return
+    if existing:
+        print(f"resuming: {existing}/{target} images present, re-fetching zip to complete")
+
     zip_path = raw_dir("coco") / f"{args.split}.zip"
     download_resume(URLS[args.split], zip_path)
-    out = args.out or raw_dir("coco", f"{args.split}_{args.n or 'all'}")
     n = extract_subset(zip_path, out, args.n, args.seed)
     print(f"extracted {n} images -> {out}")
     if args.delete_zip:
