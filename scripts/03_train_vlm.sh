@@ -5,9 +5,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # vLLM is installed here (not in setup) because it pins its own torch.
-# PINNED: latest vLLM pulls a torch built for newer CUDA than RunPod's
-# drivers (12.8) support; 0.10.x matches the torch-2.8/cu128 era.
-pip show vllm >/dev/null 2>&1 || pip install "vllm==0.10.2"
+# PINNED as a matched pair: latest vLLM pulls a torch built for newer CUDA
+# than RunPod's drivers (12.8) support, and vllm 0.10.x needs the
+# transformers-4.55 API (all_special_tokens_extended was removed later).
+pip show vllm >/dev/null 2>&1 || pip install "vllm==0.10.2" "transformers==4.55.2"
+python -c "import transformers as t; assert t.__version__.startswith('4.55'), t.__version__" \
+    || pip install "transformers==4.55.2"
 
 # LABEL_MODEL=Qwen/Qwen2.5-VL-32B-Instruct-AWQ is the budget option (~2-3x
 # faster/cheaper than 72B, slightly weaker rationales).
