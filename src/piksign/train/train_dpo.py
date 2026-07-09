@@ -63,6 +63,9 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
+    ap.add_argument("--num-proc", type=int, default=2,
+                    help="dataset map workers; vision tokenization is RAM-hungry, "
+                         "raise only if the container has headroom")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -112,7 +115,7 @@ def main() -> None:
         seed=args.seed,
         max_length=1600,
         max_prompt_length=None,
-        dataset_num_proc=4,
+        dataset_num_proc=args.num_proc,
         remove_unused_columns=False,
     )
 
