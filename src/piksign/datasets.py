@@ -96,7 +96,7 @@ class PairImageDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         path, label = self.items[idx]
-        rng = random.Random((self.seed, self.epoch, idx))
+        rng = random.Random(f"{self.seed}:{self.epoch}:{idx}")
         with Image.open(path) as im:
             img = im.convert("RGB")
         if self.train:
