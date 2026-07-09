@@ -4,6 +4,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# RunPod templates enable hf_transfer, a fast downloader that hangs silently
+# on unstable connections; xet has similar issues on network volumes.
+# Force the plain, retrying HTTP downloader for the big model pulls.
+export HF_HUB_ENABLE_HF_TRANSFER=0
+export HF_HUB_DISABLE_XET=1
+
 # vLLM is installed here (not in setup) because it pins its own torch.
 # PINNED as a matched pair: latest vLLM pulls a torch built for newer CUDA
 # than RunPod's drivers (12.8) support, and vllm 0.10.x needs the
