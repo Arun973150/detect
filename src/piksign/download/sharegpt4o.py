@@ -1,99 +1,112 @@
 """GPT-4o aligned edit pairs from ShareGPT-4o-Image (HuggingFace) for expert A4.
 
-The dataset (FreedomIntelligence/ShareGPT-4o-Image) contains text-to-image and
-text-and-image-to-image samples produced by GPT-4o. We want the EDITING subset:
-(input image, GPT-4o output image) gives aligned real/fake pairs, the same
-structure as Pico-Banana.
+Repo layout (not loadable via `datasets` - images live inside tar archives):
+  text_and_image_to_image.json         metadata: input_prompt, input_image
+                                       (LIST of paths), output_image (path)
+  text_and_image_to_image_part_*.tar   image/v2v_*.png members
 
-STREAMING by default: we never download the whole dataset to disk, only the
---n pairs we keep (important on small pod disks). Column names are discovered
-defensively from the first record.
+Strategy: parse the metadata, sample --n pairs, then STREAM each tar over
+HTTP and extract only wanted members on the fly - the archives are never
+stored on disk. Records with multiple input images (multi-reference edits)
+are skipped since their alignment is ambiguous.
 
 Outputs:
   data/processed/pairs/gpt4o/{real,fake}/<idx>.jpg          (train)
-  data/processed/pairs/gpt4o_val/{real,fake}/<idx>.jpg      (5% val)
+  data/processed/pairs/gpt4o_val/{real,fake}/<idx>.jpg      (val, every --val-every-th)
 
     python -m piksign.download.sharegpt4o --n 16000
 """
 from __future__ import annotations
 
 import argparse
-import re
-from itertools import chain
+import io
+import json
+import random
+import shutil
+import tarfile
+from pathlib import Path
 
+import requests
 from PIL import Image
 from tqdm import tqdm
 
 from . import normalize_save
-from ..paths import ensure, processed_dir
+from ..paths import ensure, processed_dir, raw_dir
 
 Image.MAX_IMAGE_PIXELS = None
 
-SOURCE_HINTS = re.compile(r"input|source|orig|before|condition", re.I)
-OUTPUT_HINTS = re.compile(r"output|edit|result|after|target|gpt", re.I)
+RESOLVE = "https://huggingface.co/datasets/{repo}/resolve/main/{fname}"
 
 
-def pick_config(repo: str, wanted: str | None):
-    from datasets import get_dataset_config_names
+def _headers() -> dict:
+    h = {"User-Agent": "piksign-research/0.1"}
     try:
-        configs = get_dataset_config_names(repo)
+        from huggingface_hub import get_token
+        tok = get_token()
+        if tok:
+            h["Authorization"] = f"Bearer {tok}"
     except Exception:  # noqa: BLE001
-        return None
-    if not configs:
-        return None
-    if wanted:
-        for c in configs:
-            if wanted.lower() in c.lower():
-                return c
-    for c in configs:
-        if OUTPUT_HINTS.search(c) or "image_to_image" in c.lower() or "editing" in c.lower():
-            return c
-    return configs[0]
+        pass
+    return h
 
 
-def detect_pair_columns(example: dict) -> tuple[str, str]:
-    img_cols = [k for k, v in example.items() if isinstance(v, Image.Image)]
-    if len(img_cols) < 2:
-        raise SystemExit(
-            "ERROR: could not find (input image, output image) columns - this looks like "
-            "the text-to-image subset. Re-run with --config pointing at the editing subset. "
-            f"Image columns found: {img_cols}. Keys: {list(example)}"
-        )
-    src = next((c for c in img_cols if SOURCE_HINTS.search(c)), None)
-    out = next((c for c in img_cols if OUTPUT_HINTS.search(c) and c != src), None)
-    if src is None or out is None:
-        src, out = img_cols[0], img_cols[1]
-        print(f"WARNING: assigning by position: source={src} output={out} - verify with audit!")
-    else:
-        print(f"source column: {src}   output column: {out}")
-    return src, out
+def list_repo_files(repo: str) -> list[str]:
+    r = requests.get(f"https://huggingface.co/api/datasets/{repo}",
+                     headers=_headers(), timeout=60)
+    r.raise_for_status()
+    return [s["rfilename"] for s in r.json().get("siblings", [])]
+
+
+def load_metadata(repo: str, meta_file: str) -> list[dict]:
+    dest = ensure(raw_dir("sharegpt4o")) / meta_file
+    if not dest.exists():
+        print(f"downloading metadata {meta_file} ...")
+        with requests.get(RESOLVE.format(repo=repo, fname=meta_file),
+                          headers=_headers(), stream=True, timeout=300) as r:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+    with open(dest, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def normalize_record(rec: dict) -> tuple[str, str] | None:
+    """Returns (input_member, output_member) basenames, or None to skip."""
+    inp = rec.get("input_image")
+    out = rec.get("output_image")
+    if isinstance(inp, list):
+        if len(inp) != 1:
+            return None  # multi-reference edit, alignment ambiguous
+        inp = inp[0]
+    if not isinstance(inp, str) or not isinstance(out, str):
+        return None
+    return Path(inp).name, Path(out).name
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo-id", default="FreedomIntelligence/ShareGPT-4o-Image")
-    ap.add_argument("--config", default=None, help="dataset config name (auto-detected otherwise)")
-    ap.add_argument("--split", default="train")
+    ap.add_argument("--meta-file", default="text_and_image_to_image.json")
+    ap.add_argument("--tar-prefix", default="text_and_image_to_image_part_")
     ap.add_argument("--n", type=int, default=16000, help="max pairs")
     ap.add_argument("--val-every", type=int, default=20, help="every k-th pair goes to val (5%%)")
-    ap.add_argument("--no-streaming", action="store_true",
-                    help="download the full dataset instead of streaming (needs big disk)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    from datasets import load_dataset
+    records = load_metadata(args.repo_id, args.meta_file)
+    print(f"{len(records)} metadata records")
 
-    cfg = pick_config(args.repo_id, args.config)
-    streaming = not args.no_streaming
-    print(f"loading {args.repo_id} config={cfg} split={args.split} streaming={streaming} ...")
-    ds = (load_dataset(args.repo_id, cfg, split=args.split, streaming=streaming)
-          if cfg else load_dataset(args.repo_id, split=args.split, streaming=streaming))
-    # seeded shuffle works for both modes (buffer-based when streaming)
-    ds = ds.shuffle(seed=args.seed, buffer_size=1000) if streaming else ds.shuffle(seed=args.seed)
+    usable: list[tuple[str, str]] = []
+    for rec in records:
+        pair = normalize_record(rec)
+        if pair:
+            usable.append(pair)
+    print(f"{len(usable)} single-input edit pairs")
 
-    it = iter(ds)
-    first = next(it)
-    src_col, out_col = detect_pair_columns(first)
+    rng = random.Random(args.seed)
+    rng.shuffle(usable)
+    sampled = usable[: args.n]
 
     roots = {
         False: processed_dir("pairs", "gpt4o"),
@@ -102,37 +115,87 @@ def main() -> None:
     for r in roots.values():
         ensure(r / "real")
         ensure(r / "fake")
+    staging = ensure(raw_dir("sharegpt4o", "staging"))
 
-    written = 0
-    bar = tqdm(total=args.n, desc="gpt4o pairs")
-    for row in chain([first], it):
-        if written >= args.n:
-            break
-        is_val = (written % args.val_every) == 0
-        root = roots[is_val]
-        real_dst = root / "real" / f"{written:07d}.jpg"
-        fake_dst = root / "fake" / f"{written:07d}.jpg"
-        if real_dst.exists() and fake_dst.exists():
-            written += 1
-            bar.update(1)
+    # wanted member basename -> list of (pair_idx, role)
+    wanted: dict[str, list[tuple[int, str]]] = {}
+    remaining = 0
+    for idx, (inp, out) in enumerate(sampled):
+        root = roots[(idx % args.val_every) == 0]
+        if (root / "real" / f"{idx:07d}.jpg").exists() and (root / "fake" / f"{idx:07d}.jpg").exists():
             continue
+        wanted.setdefault(inp, []).append((idx, "real"))
+        wanted.setdefault(out, []).append((idx, "fake"))
+        remaining += 1
+    print(f"{remaining} pairs to build ({len(sampled) - remaining} already done)")
+    if not wanted:
+        print("nothing to do")
+        return
+
+    def stage_path(idx: int, role: str) -> Path:
+        return staging / f"{idx:07d}.{role}.png"
+
+    def try_finalize(idx: int) -> bool:
+        rp, fp = stage_path(idx, "real"), stage_path(idx, "fake")
+        if not (rp.exists() and fp.exists()):
+            return False
+        root = roots[(idx % args.val_every) == 0]
         try:
-            real, fake = row[src_col], row[out_col]
-            if real is None or fake is None:
-                continue
-            real, fake = real.convert("RGB"), fake.convert("RGB")
-            if real.size != fake.size:
-                real = real.resize(fake.size, Image.LANCZOS)
-            normalize_save(fake, fake_dst)
-            normalize_save(real, real_dst)
-            written += 1
-            bar.update(1)
+            with Image.open(fp) as fk, Image.open(rp) as rl:
+                fk = fk.convert("RGB")
+                rl = rl.convert("RGB")
+                if rl.size != fk.size:
+                    rl = rl.resize(fk.size, Image.LANCZOS)
+                normalize_save(fk, root / "fake" / f"{idx:07d}.jpg")
+                normalize_save(rl, root / "real" / f"{idx:07d}.jpg")
         except Exception as e:  # noqa: BLE001
-            print(f"[skip] {e}")
-    bar.close()
-    print(f"done: {written} pairs (~1/{args.val_every} in val)")
-    print("CAVEAT: audit whether the 'real' inputs are genuine photos; if the audit or "
-          "eval looks off, fall back to COCO reals for this expert (see README).")
+            print(f"[skip pair {idx}] {e}")
+        rp.unlink(missing_ok=True)
+        fp.unlink(missing_ok=True)
+        return True
+
+    tars = sorted(f for f in list_repo_files(args.repo_id)
+                  if f.startswith(args.tar_prefix) and f.endswith(".tar"))
+    print(f"streaming {len(tars)} tar archives (extracting only wanted members)...")
+    built = 0
+    for tname in tars:
+        if not wanted:
+            break
+        url = RESOLVE.format(repo=args.repo_id, fname=tname)
+        with requests.get(url, headers=_headers(), stream=True, timeout=600) as r:
+            r.raise_for_status()
+            r.raw.decode_content = True
+            with tarfile.open(fileobj=r.raw, mode="r|*") as tf:
+                bar = tqdm(desc=tname, unit=" members")
+                for member in tf:
+                    bar.update(1)
+                    if not member.isfile():
+                        continue
+                    base = Path(member.name).name
+                    targets = wanted.pop(base, None)
+                    if not targets:
+                        continue
+                    fobj = tf.extractfile(member)
+                    if fobj is None:
+                        continue
+                    data = fobj.read()
+                    for idx, role in targets:
+                        stage_path(idx, role).write_bytes(data)
+                        if try_finalize(idx):
+                            built += 1
+                bar.close()
+        print(f"  after {tname}: {built} pairs built, {len(wanted)} members still wanted")
+
+    # leftover stages (partner never found) - clean up
+    leftovers = list(staging.glob("*.png"))
+    if leftovers:
+        print(f"cleaning {len(leftovers)} unmatched staged files")
+        shutil.rmtree(staging, ignore_errors=True)
+
+    print(f"done: {built} new pairs (target {remaining})")
+    print("CAVEAT: many inputs are uniform 1024x1024 PNGs of unknown provenance; "
+          "run the audit, and if a4 evals poorly on gpt4o_fresh retrain it with "
+          "--real-dir pointed at COCO reals (see README).")
 
 
 if __name__ == "__main__":
