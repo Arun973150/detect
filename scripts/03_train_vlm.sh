@@ -14,9 +14,8 @@ export HF_HUB_DISABLE_XET=1
 # PINNED as a matched pair: latest vLLM pulls a torch built for newer CUDA
 # than RunPod's drivers (12.8) support, and vllm 0.10.x needs the
 # transformers-4.55 API (all_special_tokens_extended was removed later).
-pip show vllm >/dev/null 2>&1 || pip install "vllm==0.10.2" "transformers==4.55.2"
-python -c "import transformers as t; assert t.__version__.startswith('4.55'), t.__version__" \
-    || pip install "transformers==4.55.2"
+pip install "vllm==0.10.2" "transformers==4.55.2"
+python -c "import transformers as t; assert t.__version__.startswith('4.55'), t.__version__"
 
 # TROUBLESHOOTING (each was hit once on RunPod, all fixed by the pins above
 # on a fresh pod; listed here in case of install-order damage):
@@ -29,6 +28,12 @@ python -c "import transformers as t; assert t.__version__.startswith('4.55'), t.
 # LABEL_MODEL=Qwen/Qwen2.5-VL-32B-Instruct-AWQ is the budget option (~2-3x
 # faster/cheaper than 72B, slightly weaker rationales).
 python -m piksign.train.label_dpo --model "${LABEL_MODEL:-Qwen/Qwen2.5-VL-72B-Instruct-AWQ}"
+
+# TRL <0.29 drops Qwen2.5-VL's image_grid_thw during VLM-DPO collation, which
+# crashes in the vision tower with: TypeError: 'NoneType' object is not iterable.
+# vLLM is no longer imported after labeling, so it is safe to move transformers
+# back to the newer version required by TRL's fixed vision preference collator.
+pip install -U "transformers>=4.56.2" "trl[vlm]>=0.29,<0.30"
 
 python -m piksign.train.train_dpo
 

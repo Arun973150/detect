@@ -12,8 +12,10 @@ Output: checkpoints/vlm_dpo/  (LoRA adapter)
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
+from importlib.metadata import version
 from pathlib import Path
 
 import torch
@@ -97,6 +99,14 @@ def main() -> None:
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
     from trl import DPOConfig, DPOTrainer
 
+    trl_major_minor = tuple(int(p) for p in version("trl").split("+")[0].split(".")[:2])
+    if trl_major_minor < (0, 29):
+        raise SystemExit(
+            "Qwen2.5-VL DPO needs trl>=0.29 so image_grid_thw is kept in "
+            "vision batches. Run: pip install -U 'transformers>=4.56.2' "
+            "'trl[vlm]>=0.29,<0.30'"
+        )
+
     rows = load_pairs(pairs_path)
     print(f"{len(rows)} preference pairs")
     ds = Dataset.from_list(rows)
@@ -118,25 +128,32 @@ def main() -> None:
         task_type="CAUSAL_LM",
     )
 
-    cfg = DPOConfig(
-        output_dir=str(out_dir),
-        beta=args.beta,
-        learning_rate=args.lr,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.bs,
-        gradient_accumulation_steps=args.grad_accum,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        bf16=True,
-        logging_steps=10,
-        save_strategy="epoch",
-        report_to=[],
-        seed=args.seed,
-        max_length=1600,
-        max_prompt_length=None,
-        dataset_num_proc=args.num_proc,
-        remove_unused_columns=False,
-    )
+    dpo_kwargs = {
+        "output_dir": str(out_dir),
+        "beta": args.beta,
+        "learning_rate": args.lr,
+        "num_train_epochs": args.epochs,
+        "per_device_train_batch_size": args.bs,
+        "gradient_accumulation_steps": args.grad_accum,
+        "gradient_checkpointing": True,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "bf16": True,
+        "logging_steps": 10,
+        "save_strategy": "epoch",
+        "report_to": [],
+        "seed": args.seed,
+        # For VLM-DPO, truncating can remove image tokens while keeping
+        # pixel_values, which breaks Qwen2.5-VL's vision/text alignment.
+        "max_length": None,
+        "max_prompt_length": None,
+        "dataset_num_proc": args.num_proc,
+        "remove_unused_columns": False,
+    }
+    supported_dpo_args = set(inspect.signature(DPOConfig).parameters)
+    dropped = sorted(set(dpo_kwargs) - supported_dpo_args)
+    if dropped:
+        print(f"Skipping unsupported DPOConfig args for trl {version('trl')}: {', '.join(dropped)}")
+    cfg = DPOConfig(**{k: v for k, v in dpo_kwargs.items() if k in supported_dpo_args})
 
     trainer = DPOTrainer(
         model=model,
