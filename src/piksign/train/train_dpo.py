@@ -22,6 +22,10 @@ from ..paths import ckpt_root, processed_dir
 
 # fork-safety: the tokenizer's Rust thread pool must not exist when workers fork
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# force-disable the flaky fast downloaders (RunPod templates enable hf_transfer,
+# which errors when the package is absent and stalls silently when present)
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ["HF_HUB_DISABLE_XET"] = "1"
 
 
 def load_pairs(path: Path) -> list[dict]:
