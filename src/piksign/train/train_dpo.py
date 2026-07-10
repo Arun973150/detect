@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
 
 from ..paths import ckpt_root, processed_dir
+
+# fork-safety: the tokenizer's Rust thread pool must not exist when workers fork
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def load_pairs(path: Path) -> list[dict]:
@@ -63,9 +67,12 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=8)
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
-    ap.add_argument("--num-proc", type=int, default=2,
-                    help="dataset map workers; vision tokenization is RAM-hungry, "
-                         "raise only if the container has headroom")
+    ap.add_argument("--num-proc", type=int, default=1,
+                    help="dataset map workers; 1 = in-process (no fork, no deadlock, "
+                         "continuous progress bar). >1 risks fork-deadlock after the "
+                         "model/tokenizer are loaded - verified on RunPod.")
+    ap.add_argument("--max-pixels", type=int, default=768 * 28 * 28,
+                    help="vision token budget per image (smaller = faster tokenize/train)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -85,7 +92,7 @@ def main() -> None:
     ds = ds.cast_column("images", Sequence(HFImage()))  # lazy image loading
 
     processor = AutoProcessor.from_pretrained(
-        args.base, min_pixels=256 * 28 * 28, max_pixels=1024 * 28 * 28
+        args.base, min_pixels=256 * 28 * 28, max_pixels=args.max_pixels
     )
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.base, torch_dtype=torch.bfloat16, attn_implementation="sdpa",
@@ -108,6 +115,7 @@ def main() -> None:
         per_device_train_batch_size=args.bs,
         gradient_accumulation_steps=args.grad_accum,
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         bf16=True,
         logging_steps=10,
         save_strategy="epoch",
