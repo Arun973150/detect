@@ -83,6 +83,9 @@ def main() -> None:
                     pass
         print(f"resuming: {len(done)} already labeled")
     todo = [(p, l) for p, l in items if str(p) not in done]
+    if not todo:
+        print(f"nothing to label; all pairs already present in {out_path}")
+        return
 
     from transformers import AutoProcessor
     from vllm import LLM, SamplingParams

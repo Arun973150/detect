@@ -26,10 +26,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# DPO fine-tuning of the semantic VLM branch
-dpo = ["trl>=0.17,<0.22"]
+# DPO fine-tuning of the semantic VLM branch. TRL 0.29+ keeps Qwen2.5-VL's
+# processor-specific vision metadata (image_grid_thw) in DPO batches.
+dpo = ["trl[vlm]>=0.29,<0.30"]
 # Local DPO label generation with Qwen2.5-VL-72B-AWQ
-label = ["vllm>=0.8"]
+label = ["vllm==0.10.2"]
 # Fresh eval-image generation via commercial APIs
 gen = ["google-genai>=1.0", "openai>=1.60"]
 
