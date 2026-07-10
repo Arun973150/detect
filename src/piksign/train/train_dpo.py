@@ -20,7 +20,14 @@ import torch
 
 from ..paths import ckpt_root, processed_dir
 
-# fork-safety: the tokenizer's Rust thread pool must not exist when workers fork
+# Fork-deadlock avoidance: the Qwen2.5-VL fast image processor uses Rust
+# (rayon) + OpenMP thread pools; when HF datasets .map forks after those pools
+# are live, tokenization wedges at 0% with low CPU. Capping every native pool
+# to 1 thread before those libs initialize prevents the deadlock. Verified on
+# RunPod: without these, tokenization hangs indefinitely.
+for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "RAYON_NUM_THREADS",
+           "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # force-disable the flaky fast downloaders (RunPod templates enable hf_transfer,
 # which errors when the package is absent and stalls silently when present)
