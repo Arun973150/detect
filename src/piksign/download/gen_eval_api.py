@@ -107,18 +107,27 @@ def gen_gemini(prompt: str, model: str) -> bytes | None:
     return None
 
 
+_OPENAI_QUALITY = "medium"  # set from --quality in main()
+
+
 def gen_openai(prompt: str, model: str) -> bytes | None:
     from openai import OpenAI
     client = OpenAI()
-    resp = client.images.generate(model=model, prompt=prompt, size="1024x1024", quality="medium", n=1)
+    resp = client.images.generate(
+        model=model, prompt=prompt, size="1024x1024", quality=_OPENAI_QUALITY, n=1
+    )
     b64 = resp.data[0].b64_json
     return base64.b64decode(b64) if b64 else None
 
 
 PROVIDERS = {
+    # Nano Banana - blocked on API free tier (0 image quota); use
+    # piksign.download.eval_picobanana for a free held-out set instead.
     "gemini": {"fn": gen_gemini, "model": "gemini-2.5-flash-image", "env": "GEMINI_API_KEY",
                "source": "nanobanana_fresh", "usd": 0.04},
-    "openai": {"fn": gen_openai, "model": "gpt-image-1", "env": "OPENAI_API_KEY",
+    # OpenAI image models (2026): gpt-image-2 (flagship), gpt-image-1.5 (default),
+    # gpt-image-1 (deprecating), gpt-image-1-mini (cheapest). Override with --model.
+    "openai": {"fn": gen_openai, "model": "gpt-image-1.5", "env": "OPENAI_API_KEY",
                "source": "gpt4o_fresh", "usd": 0.04},
 }
 
@@ -126,7 +135,9 @@ PROVIDERS = {
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--provider", choices=sorted(PROVIDERS), required=True)
-    ap.add_argument("--model", default=None, help="override model id")
+    ap.add_argument("--model", default=None, help="override model id (e.g. gpt-image-2)")
+    ap.add_argument("--quality", choices=["low", "medium", "high"], default="medium",
+                    help="OpenAI image quality; lower = cheaper (stretches a small budget)")
     ap.add_argument("--n", type=int, default=400)
     ap.add_argument("--style", choices=["photo", "surreal", "mixed"], default="mixed")
     ap.add_argument("--seed", type=int, default=7)
@@ -136,8 +147,11 @@ def main() -> None:
 
     p = PROVIDERS[args.provider]
     model = args.model or p["model"]
+    global _OPENAI_QUALITY
+    _OPENAI_QUALITY = args.quality
     est = args.n * p["usd"]
-    print(f"provider={args.provider} model={model} n={args.n} est. cost ~${est:.0f}")
+    print(f"provider={args.provider} model={model} quality={args.quality} "
+          f"n={args.n} est. cost ~${est:.0f} (verify actual on your billing dashboard)")
     if not args.yes:
         raise SystemExit("re-run with --yes to confirm spending")
     if not os.environ.get(p["env"]):
