@@ -6,8 +6,8 @@ GPT-Image-Edit-1.5M's ultraedit subset has real-photo inputs with
 gpt-image-1 outputs, license CC-BY-4.0.
 
 Repo layout: gpt-edit/ultraedit.tar.gz.part001..004 (one gzip stream split
-into parts; ~78GB total). Inside: ultraedit/<task>/input/<id>.png and
-ultraedit/<task>/output/<id>.png, paired by identical <id>. We chain the
+into parts; ~78GB total). Inside: <subset>/<task>/<role>/<id>.png,
+paired by identical <id>. We chain the
 part URLs into one HTTP stream, stage inputs (bounded per task), finalize a
 pair when its output arrives, and stop as soon as --n pairs exist - archives
 never touch the disk.
@@ -17,6 +17,9 @@ Outputs:
   data/processed/pairs/gpt4o_v2_val/{real,fake}/...   (stable hash split)
 
     python -m piksign.download.gptimageedit --n 16000
+    python -m piksign.download.gptimageedit \
+        --part-prefix gpt-edit/hqedit.tar.gz.part \
+        --include-task edit --out-name gpt4o_hqedit_edit --n 16000
 """
 from __future__ import annotations
 
@@ -107,7 +110,7 @@ class ChainedHTTPStream:
 
 
 def parse_member(name: str) -> tuple[str, str, str] | None:
-    """ultraedit/<task>/<role>/<id>.png -> (task, role, id) or None."""
+    """<subset>/<task>/<role>/<id>.png -> (task, role, id) or None."""
     parts = name.strip("/").split("/")
     if len(parts) != 4:
         return None
@@ -128,7 +131,13 @@ def main() -> None:
                     help="max inputs staged per task while waiting for outputs")
     ap.add_argument("--val-every", type=int, default=20)
     ap.add_argument("--out-name", default="gpt4o_v2")
+    ap.add_argument("--include-task", action="append", default=[],
+                    help="only keep this task; repeatable. Example: --include-task edit")
+    ap.add_argument("--exclude-task", action="append", default=[],
+                    help="drop this task; repeatable")
     args = ap.parse_args()
+    include_tasks = set(args.include_task)
+    exclude_tasks = set(args.exclude_task)
 
     train_root = processed_dir("pairs", args.out_name)
     val_root = processed_dir("pairs", args.out_name + "_val")
@@ -167,6 +176,10 @@ def main() -> None:
                 if parsed is None:
                     continue
                 task, role, pid = parsed
+                if include_tasks and task not in include_tasks:
+                    continue
+                if task in exclude_tasks:
+                    continue
                 real_dst, fake_dst = pair_paths(task, pid)
                 if real_dst.exists() and fake_dst.exists():
                     continue
