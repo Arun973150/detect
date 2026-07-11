@@ -19,6 +19,8 @@ JPEG q95 funnel, so no format/resolution shortcut exists.
 
     python -m piksign.recon.vae_reconstruct --vae sd21 --input data/raw/coco/train2017_12000
     python -m piksign.recon.vae_reconstruct --vae flux --input data/raw/coco/train2017_12000
+    python -m piksign.recon.vae_reconstruct --vae sd21 \
+        --input data/processed/reals/modern_train --out-name sd21_modern_recon
 """
 from __future__ import annotations
 
@@ -75,6 +77,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--vae", choices=sorted(VAES), required=True)
     ap.add_argument("--input", type=Path, required=True, help="directory of real images")
+    ap.add_argument("--out-name", default=None,
+                    help="default: <vae>_recon under data/processed/pairs")
     ap.add_argument("--n", type=int, default=0, help="cap (0 = all)")
     ap.add_argument("--max-side", type=int, default=1024)
     ap.add_argument("--seed", type=int, default=42)
@@ -92,7 +96,7 @@ def main() -> None:
     vae = AutoencoderKL.from_pretrained(repo, **kwargs)
     vae = vae.to(args.device).eval()
 
-    out_root = processed_dir("pairs", f"{args.vae}_recon")
+    out_root = processed_dir("pairs", args.out_name or f"{args.vae}_recon")
     real_out = ensure(out_root / "real")
     fake_out = ensure(out_root / "fake")
 
