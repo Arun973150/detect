@@ -47,6 +47,19 @@ python -m piksign.recon.vae_reconstruct --vae sd21 \
     --out-name sd21_modern_recon_val \
     --n "$SD_RECON_N"
 
+# FLUX-VAE recon on the same modern reals: a2 was the best pixel catcher on
+# Gemini/Nano Banana (its autoencoder is in the FLUX family), so retraining it
+# on modern reals matters most for the actual target.
+python -m piksign.recon.vae_reconstruct --vae flux \
+    --input "$REAL_TRAIN" \
+    --out-name flux_modern_recon \
+    --n "$SD_RECON_N"
+
+python -m piksign.recon.vae_reconstruct --vae flux \
+    --input "$REAL_VAL" \
+    --out-name flux_modern_recon_val \
+    --n "$SD_RECON_N"
+
 python -m piksign.download.gptimageedit \
     --part-prefix gpt-edit/ultraedit.tar.gz.part \
     --out-name gpt4o_ultraedit \
@@ -82,5 +95,9 @@ python -m piksign.download.image_pool \
 
 python -m piksign.audit --real "$PAIRS/gpt4o_modern/real" \
                         --fake "$PAIRS/gpt4o_modern/fake"
+python -m piksign.audit --real "$PAIRS/sd21_modern_recon/real" \
+                        --fake "$PAIRS/sd21_modern_recon/fake"
+python -m piksign.audit --real "$PAIRS/flux_modern_recon/real" \
+                        --fake "$PAIRS/flux_modern_recon/fake"
 
 echo "modern expert data ready."
