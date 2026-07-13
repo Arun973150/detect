@@ -25,9 +25,22 @@ SD_RECON_N="${SD_RECON_N:-0}"
 GPT_ULTRAEDIT_N="${GPT_ULTRAEDIT_N:-16000}"
 GPT_HQEDIT_N="${GPT_HQEDIT_N:-16000}"
 
-if [ ! -d "$REAL_SRC" ]; then
-    echo "missing real-photo source: $REAL_SRC"
-    echo "put FODB/DPED/OpenImages/YFCC-style real images there or set MODERN_REALS_DIR"
+# Modern reals: by default pull them directly from OpenFake (current 2025-2026
+# photos: Pexels/DOCCI/Reddit in-the-wild). Set OPENFAKE_REALS=0 to instead use
+# your own $REAL_SRC folder (VISION/FODB/your phone photos). Either way, drop
+# your own phone photos into $REAL_SRC too - image_pool merges all of it.
+mkdir -p "$REAL_SRC"
+if [ "${OPENFAKE_REALS:-1}" = "1" ]; then
+    python -m piksign.download.openfake --config reddit --split test --label real \
+        --out "$REAL_SRC/openfake_reddit" --n "${OPENFAKE_REDDIT_N:-15000}"
+    python -m piksign.download.openfake --config core --split train --label real \
+        --min-date "${MODERN_MIN_DATE:-2024}" \
+        --out "$REAL_SRC/openfake_core" --n "${OPENFAKE_CORE_N:-25000}"
+fi
+
+if [ -z "$(ls -A "$REAL_SRC" 2>/dev/null)" ]; then
+    echo "no real photos under $REAL_SRC"
+    echo "enable OPENFAKE_REALS=1 (default) or add your own images / set MODERN_REALS_DIR"
     exit 1
 fi
 
