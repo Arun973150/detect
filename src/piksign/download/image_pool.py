@@ -40,6 +40,11 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True, help="train/output directory")
     ap.add_argument("--val-out", type=Path, default=None, help="optional validation directory")
     ap.add_argument("--n", type=int, default=0, help="cap images after shuffling (0 = all)")
+    ap.add_argument("--max-side", type=int, default=0,
+                    help="downscale so max(w,h) <= this before normalizing (0 = keep native). "
+                         "Use for full-res reals paired against low-res fakes: without it, "
+                         "resolution itself becomes the label and VAE recon crops land in "
+                         "smooth regions with no learnable fingerprint.")
     ap.add_argument("--val-every", type=int, default=20,
                     help="send every kth stable-hash image to --val-out; 0 disables")
     ap.add_argument("--seed", type=int, default=42)
@@ -79,7 +84,10 @@ def main() -> None:
             continue
         try:
             with Image.open(p) as im:
-                normalize_save(im.convert("RGB"), dst)
+                im = im.convert("RGB")
+                if args.max_side and max(im.size) > args.max_side:
+                    im.thumbnail((args.max_side, args.max_side), Image.LANCZOS)
+                normalize_save(im, dst)
             if use_val:
                 val_n += 1
             else:

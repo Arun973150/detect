@@ -31,11 +31,19 @@ GPT_HQEDIT_N="${GPT_HQEDIT_N:-16000}"
 # your own phone photos into $REAL_SRC too - image_pool merges all of it.
 mkdir -p "$REAL_SRC"
 if [ "${OPENFAKE_REALS:-1}" = "1" ]; then
+    # Non-fatal: the OpenFake streams can segfault mid-iteration on a bad row
+    # (native pyarrow/PIL abort, uncatchable in Python). Never let that kill the
+    # whole pipeline - keep whatever reals already landed and push on to recon.
+    # Both pulls are resumable (they skip files already on disk).
     python -m piksign.download.openfake --config reddit --split test --label real \
-        --out "$REAL_SRC/openfake_reddit" --n "${OPENFAKE_REDDIT_N:-15000}"
-    python -m piksign.download.openfake --config core --split train --label real \
-        --min-date "${MODERN_MIN_DATE:-2024}" \
-        --out "$REAL_SRC/openfake_core" --n "${OPENFAKE_CORE_N:-25000}"
+        --out "$REAL_SRC/openfake_reddit" --n "${OPENFAKE_REDDIT_N:-15000}" \
+        || echo "[warn] openfake reddit stream ended early - keeping what downloaded"
+    if [ "${OPENFAKE_CORE_N:-25000}" != "0" ]; then
+        python -m piksign.download.openfake --config core --split train --label real \
+            --min-date "${MODERN_MIN_DATE:-2024}" \
+            --out "$REAL_SRC/openfake_core" --n "${OPENFAKE_CORE_N:-25000}" \
+            || echo "[warn] openfake core stream ended early - keeping what downloaded"
+    fi
 fi
 
 if [ -z "$(ls -A "$REAL_SRC" 2>/dev/null)" ]; then
@@ -44,10 +52,16 @@ if [ -z "$(ls -A "$REAL_SRC" 2>/dev/null)" ]; then
     exit 1
 fi
 
+# --max-side 640: OpenFake reals arrive at ~9MP while the GPT fakes are ~0.26MP.
+# Unresized, resolution itself becomes the label (a4 "learns" big=real) and the
+# 1024px recon crops land in smooth 9MP regions where the VAE reconstructs
+# perfectly, so a1/a2 flatline at 50%. Downscaling restores parity and puts the
+# whole busy frame inside every crop.
 python -m piksign.download.image_pool \
     --input "$REAL_SRC" \
     --out "$REAL_TRAIN" \
     --val-out "$REAL_VAL" \
+    --max-side "${REAL_MAX_SIDE:-640}" \
     --n "$REAL_N"
 
 python -m piksign.recon.vae_reconstruct --vae sd21 \
