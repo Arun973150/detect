@@ -1,0 +1,21 @@
+{
+  "_readme": "Phone-calibrated operating point. Deploy: cp configs/calibration.json $PIKSIGN_CKPT/calibration.json (the CLI reads it from there; only 'thresholds' and 'provenance_threshold' are consumed, every other key is documentation).",
+  "_fitted": "2026-07-15, per-branch 98th percentile (2% FPR/branch) of 39 real phone photos, on the modern-retrained experts (val bacc: a1_sd21 0.952, a2_flux_gentle 0.980, a4_gpt4o 0.982; a3_nanobanana 0.961 from the original run). vlm rounded up from 0.507 so the max-scoring calibration real sits strictly below.",
+  "_verified": {
+    "gemini_fakes_caught": "8/8",
+    "ai_edit_fakes_caught": "8/10 (mytest_norm; the 2 misses sit inside the real/fake score overlap)",
+    "phone_reals_flagged": "0/39 (calibration set)",
+    "mytest_reals_flagged": "0/10",
+    "heldout_modern_reals": "365 reals never seen in fitting: each branch fires at 1.6-2.2%, matching the 2% design"
+  },
+  "global_fpr": null,
+  "per_branch_fpr": 0.02,
+  "thresholds": {
+    "a1_sd21": 0.819,
+    "a2_flux_gentle": 0.953,
+    "a3_nanobanana": 0.985,
+    "a4_gpt4o": 0.931,
+    "vlm": 0.51
+  },
+  "provenance_threshold": 0.85
+}
